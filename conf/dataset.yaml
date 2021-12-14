@@ -1,0 +1,31 @@
+# base info
+root_dir: "~/kitti"
+train: False
+num_classes: 4
+difficulty: ???
+input_features: "i"
+label_method: "Car"
+
+# data preprocess
+data_aug_configs: ???
+downsample_by_voxel_size: null
+
+# graph gen
+graph_gen_method: "multi_level_local_graph_v3"
+graph_gen_kwargs: 
+  add_rnd3d: false
+  base_voxel_size: 0.8
+  level_configs: 
+    - graph_gen_kwargs: 
+        num_neighbors: -1
+        radius: 1.0
+      graph_gen_method: "disjointed_rnn_local_graph_v3"
+      graph_level: 0
+      graph_scale: 0.5
+    - graph_gen_kwargs: 
+        num_neighbors: -1
+        radius: 4.0
+      graph_gen_method: "disjointed_rnn_local_graph_v3"
+      graph_level: 1
+      graph_scale: 0.5
+box_encoding_method: "classaware_all_class_box_encoding"

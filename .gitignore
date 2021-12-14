@@ -1,0 +1,4 @@
+*.prof
+*.log
+build/*
+*.json

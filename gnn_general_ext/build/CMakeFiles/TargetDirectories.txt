@@ -1,0 +1,4 @@
+/root/workspaces/python/pyg/gnn_general_ext/build/CMakeFiles/rebuild_cache.dir
+/root/workspaces/python/pyg/gnn_general_ext/build/CMakeFiles/edit_cache.dir
+/root/workspaces/python/pyg/gnn_general_ext/build/CMakeFiles/cuda_impl.dir
+/root/workspaces/python/pyg/gnn_general_ext/build/CMakeFiles/gnn_ext.dir
