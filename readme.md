@@ -44,7 +44,7 @@ For gnn_advisor_ext, just running
 will be fun.
 
 ## Some Pitfalls
-### Why didn't I use the torch_extension to build the C++ extension?
+### Why didn't I use the recommended torch_extension toolchains to build the C++ extension directly?
 It is too slow. I can't stand with it. So, I still choose to use cmake, that I am familiar with.
 
 ### About Cmake
@@ -71,7 +71,7 @@ set_property(TARGET cuda_impl PROPERTY CUDA_STANDARD 17)
 target_compile_options(cuda_impl PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>)
 ```
 ### About PyTorch and Libtorch
-Although I didn't use the torch_extension to build, I still rely on torch_extension to write the codes. Why?
+Although I didn't use the torch_extension toolchains to build, I still rely on torch_extension to write the codes. Why?
 
 Because I want to import them using Python as the frontend, and using libtorch may incur mismatched versions with pytorch. Meanwhile, using torch_extension can link the torch_python.so directly.
 

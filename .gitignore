@@ -3,3 +3,8 @@
 build/
 *.json
 *.egg
+__pycache__/
+*.egg-info/
+eggs/
+.eggs/
+*.swap
