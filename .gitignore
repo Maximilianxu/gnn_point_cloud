@@ -1,4 +1,5 @@
 *.prof
 *.log
-build/*
+build/
 *.json
+*.egg
