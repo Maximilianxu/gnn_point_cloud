@@ -29,6 +29,9 @@ file(GLOB CUDA_KERNELS CONFIGURE_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/../src/cuda/*
 # add_subdirectory(cuda/)
 
 # basic libs
+find_package(Python COMPONENTS Interpreter Development)
+# list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}")
+find_package(Python3 REQUIRED)
 find_package(pybind11 REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(Threads REQUIRED)
@@ -48,7 +51,8 @@ include_directories(${TARGET_INC} /usr/include ${TORCH_PATH}/include ${TORCH_PAT
 add_library(cuda_impl OBJECT ${CUDA_KERNELS})
 # CUDA_COMPILE(cuda_impl ${CUDA_KERNELS})
 # $<TARGET_OBJECTS:cuda_impl>
-add_library(${PROJECT_NAME} MODULE ${TARGET_SRC} $<TARGET_OBJECTS:cuda_impl>)
+# add_library(${PROJECT_NAME} MODULE ${TARGET_SRC} $<TARGET_OBJECTS:cuda_impl>)
+pybind11_add_module(${PROJECT_NAME} ${TARGET_SRC} $<TARGET_OBJECTS:cuda_impl>)
 
 # basic props
 if(CXX17)
@@ -88,5 +92,5 @@ target_compile_options(${PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${CXX_F
 target_link_libraries(${PROJECT_NAME} PRIVATE tcmalloc_minimal numa Threads::Threads OpenMP::OpenMP_CXX pybind11::module pybind11::lto pybind11::windows_extras
   c10 torch torch_cpu torch_python cudart c10_cuda torch_cuda_cu torch_cuda_cpp)
 
-pybind11_extension(${PROJECT_NAME})
-pybind11_strip(${PROJECT_NAME})
+# pybind11_extension(${PROJECT_NAME})
+# pybind11_strip(${PROJECT_NAME})

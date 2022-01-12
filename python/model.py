@@ -3,8 +3,7 @@ from util import *
 import torch.nn as nn
 import torch_scatter
 import dgl
-
-assert backend_framework in ["torch", "pyg", "dgl"]
+import gnn_ext
 
 def multi_linear_network_fn(Ks, is_logits=False):
   linears = []
@@ -14,7 +13,7 @@ def multi_linear_network_fn(Ks, is_logits=False):
   linears.extend([nn.Linear(Ks[-2], Ks[-1])] + ([] if is_logits else [nn.ReLU()]))
   return nn.Sequential(*linears)
 
-set_features = torch.zeros(300, 8000, device=torch.device("cuda:0"))
+# set_features = torch.zeros(3, 8192, device=torch.device("cuda:0"))
 
 def max_aggregation_fn(features, set_indices, keypoints_len):
   """
@@ -22,14 +21,15 @@ def max_aggregation_fn(features, set_indices, keypoints_len):
   set_indices: [N], the group index of each feature belong to, used to scatter
   keypoints_len: K, there are K distinct group indices in set_indices
   """
-  global set_features
+  # global set_features
   # LOGD("feat size:", features.size(), "set ind size:", set_indices.size())
   set_indices = set_indices.unsqueeze(0).expand(features.shape[1], -1) # [N] -> [D, N]
   # set_features: [D, K], used to scatter N points to K targets
-  #set_features = torch.zeros(features.shape[-1], keypoints_len, device=torch.device("cuda:0"))
+  set_features = torch.zeros(features.shape[-1], keypoints_len, device=torch.device("cuda:0"))
   # LOGD("expect set feat size:", [features.shape[-1]] + [keypoints_len])
   # the torch scatter 's input tensors should have size: N1 * N2, where N2 is the scatter apply dimension
   # for features N * D, we need to scatter D among N samples, N is the scatter dimension, thus, permute is needed
+  # LOGD(features.size(), set_features.size(), set_indices.size())
   final_features, _ = torch_scatter.scatter_max(features.permute(1, 0), set_indices, out=set_features)
   final_features = final_features[:, :keypoints_len]
   #LOGD(final_features.size())
@@ -80,9 +80,11 @@ class GraphNetAutoCenter(MessagePassing):
       return self.torch_forward(*args)
     elif backend_framework == "pyg":
       return self.pyg_forward(*args)
-    else:
+    elif backend_framework == "dgl":
       assert backend_framework == "dgl"
       return self.dgl_forward(*args)
+    elif backend_framework == "ext":
+      return self.ext_forward(*args)
   
   def dgl_forward(self, graph):
     def update_udf(nodes):
@@ -99,6 +101,27 @@ class GraphNetAutoCenter(MessagePassing):
       graph.apply_nodes(update_udf)
       return graph.ndata["x"]
   
+  def ext_forward(self, x, edge_index, keys, coords, row_pointers, column_index, degrees, 
+    part_ptr, part_to_nodes, part_size=32, dim_worker=30, warp_per_block=32):
+
+    # the two parts can run in parallel, if we use two GPUs, or two streams
+    # LOGD(x.size(), coords.size())
+    src_feats = self.edge_feature_fn(torch.cat([x, coords], dim=1))
+    feats, = gnn_ext.sage_forward(src_feats, row_pointers, column_index, degrees, part_ptr, part_to_nodes, 
+      part_size, dim_worker, warp_per_block, "max")
+    
+    source_coordinates = coords[edge_index[0, :], :]
+    if self.auto_offset:
+      offset = self.auto_offset_fn(x)
+      ao_coordinates = coords + offset
+    diff_coordinates = source_coordinates - ao_coordinates[edge_index[1, :], :]
+    # aggr_coords = max_aggregation_fn(diff_coordinates, edge_index[1, :], keys.size(0))
+    # cat_feats = torch.cat([feats, aggr_coords], dim=1)
+    
+    upd_feats = self.update_fn(feats)
+    upd_feats += x
+    return upd_feats
+
   def torch_forward(self, x, coordinates, keypoints, edge_index):
     # use torch native API, not pyg
     source_coordinates = coordinates[edge_index[0, :], :]
@@ -202,8 +225,29 @@ class MultiLayerFastLocalGraph(nn.Module):
   def forward(self, *args):
     if backend_framework == "dgl":
       return self.dgl_forward(*args)
-    else:
+    elif backend_framework == "pyg" or backend_framework == "torch":
       return self.pyg_forward(*args)
+    elif backend_framework == "ext":
+      return self.ext_forward(*args)
+  
+  def ext_forward(self, graphs):
+    for i in range(len(self.layers)):
+      graph_level = self.layer_configs[i]["graph_level"]
+      layer = self.layers[i]
+      sg = graphs[graph_level]
+      for j in range(len(sg)):
+        sg[j] = sg[j].cuda()
+      # this edge_index shape is 2xE
+      if isinstance(layer, GraphNetAutoCenter):
+        feat = layer(*sg)
+      else:
+        feat, edges, keys, coords = sg[:4]
+        feat = layer(feat, coords, keys, edges)
+      if i < len(self.layers) - 1:
+        ngl = self.layer_configs[i + 1]["graph_level"]
+        graphs[ngl][0] = feat
+    
+    return self.predictor(feat)
 
   def dgl_forward(self, graphs, cuda=True):
     dev = torch.device("cuda:0") if cuda and torch.cuda.is_available() else torch.device("cpu")

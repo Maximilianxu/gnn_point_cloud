@@ -2,7 +2,7 @@ import numpy as np
 from termcolor import colored
 from omegaconf import OmegaConf
 
-backend_framework = OmegaConf.load("conf/settings.yaml")["backend"] # used to set backend
+backend_framework = OmegaConf.load("../conf/settings.yaml")["backend"] # used to set backend
 
 def LOGF(*args):
   print(colored('=>F:', 'red', attrs=['bold']), ' '.join(list(map(lambda x: str(x), list(args)))))

@@ -3,8 +3,10 @@
 #include <vector>
 #include <torch/extension.h>
 #include <stdio.h>
+#include <string>
 
 #define WARP_SIZE 32
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 
 __global__ void warmup(){}
 
@@ -13,6 +15,25 @@ void atomicAddF(float* address, float value){
   float old = value;  
   while ((old = atomicExch(address, atomicExch(address, 0.0f) + old)) != 0.0f);
 }
+
+__device__ inline
+void atomicMaxF(float *addr, float val){
+    float old = val;
+    while((old = atomicExch(addr, MAX(atomicExch(addr, 0.0f), old))) != 0.0f);
+}
+
+template <typename T>
+__device__ inline
+void max_func(T* t1, T t2){
+    *t1 = MAX(*t1, t2);
+}
+
+template <typename T>
+__device__ inline
+void add_func(T* t1, T t2){
+    *t1 += t2;
+}
+
 
 template <typename scalar_t>
 __global__ void cudaGatherReduce(
@@ -28,7 +49,8 @@ __global__ void cudaGatherReduce(
     const int num_parts,
     const int part_size,
     const int dim_worker,
-    const int warp_per_block
+    const int warp_per_block,
+    const int aggr_type
 ){  
     int tid =  blockIdx.x * blockDim.x + threadIdx.x;  // global thread-id
     int warpid = tid / WARP_SIZE;                             // global warp-id
@@ -38,6 +60,8 @@ __global__ void cudaGatherReduce(
     extern __shared__ int part_meta[];                                      // part information.
     int *partial_ids = part_meta;                                           // caching ids
     float *partial_results = (float*)&part_meta[part_size * warp_per_block];     // caching partial results.
+    void (*atomic_aggr_func) (float*, float) = (aggr_type > 0) ? &atomicMaxF : &atomicAddF;
+    void (*plain_aggr_func) (float*, float) = (aggr_type > 0) ? &max_func<float> : &add_func<float>;
 
     if (warpid < num_parts){
 
@@ -91,7 +115,7 @@ __global__ void cudaGatherReduce(
                 #pragma unroll
                 for (int d = laneid; d < dim; d += dim_worker){
                     // if(nid >= num_nodes || nid < 0) printf("aggregation: %d\n", nid);
-                    partial_results[presult_base + d] += __fmaf_rn(1.0, input[nid][d], 0);
+                    (*plain_aggr_func)(&partial_results[presult_base + d], __fmaf_rn(1.0, input[nid][d], 0));
                     // partial_results[presult_base + d] += input[nid][d];
                 }
         }
@@ -100,7 +124,7 @@ __global__ void cudaGatherReduce(
         if (laneid < dim_worker)
             #pragma unroll
             for (int d = laneid; d < dim; d += dim_worker){
-                atomicAddF((float*)&output[srcid][d], partial_results[presult_base + d]);
+                (*atomic_aggr_func)((float*)&output[srcid][d], partial_results[presult_base + d]);
             }
     }
 }
@@ -108,7 +132,6 @@ __global__ void cudaGatherReduce(
 
 std::vector<torch::Tensor> SAGEForwardCuda(
     torch::Tensor input,
-    torch::Tensor weight,
     torch::Tensor row_pointers,
     torch::Tensor column_index,
     torch::Tensor degrees,
@@ -116,26 +139,26 @@ std::vector<torch::Tensor> SAGEForwardCuda(
     torch::Tensor part_nodes,
     int part_size, 
     int dim_workder, 
-    int warp_per_block
+    int warp_per_block,
+    std::string &aggr_type
 ) {
     // printf("kernel start\n");
-    auto tmp = torch::mm(input, weight);
+    auto &tmp = input;
     // auto output = torch::zeros_like(tmp);
-    auto output = torch::zeros({input.size(0), weight.size(1)}, torch::kCUDA);
+    auto output = torch::zeros({input.size(0), input.size(1)}, torch::kCUDA);
     const int dim = output.size(1);
     const int num_nodes = output.size(0);
     const int num_parts = part_nodes.size(0);
 
     const int block = warp_per_block * WARP_SIZE;
     const int grid = (num_parts * WARP_SIZE + block  - 1) / block; 
-    int shared_memory = part_size*warp_per_block*sizeof(int)+warp_per_block*dim*sizeof(float);
+    int shared_memory = part_size*warp_per_block*sizeof(int) + warp_per_block*dim*sizeof(float);
 
     // printf("grid: %d, block: %d\n", grid, block);
     // printf("dim: %d, num_nodes: %d, num_parts: %d\n", dim, num_nodes, num_parts);
     // printf("input: (%d, %d)\n", tmp.size(0), tmp.size(1));
     // printf("dim_workder: %d\n", dim_workder);
     // printf("shared_memory: %d\n", tmp.size(0), tmp.size(1));
-
     AT_DISPATCH_FLOATING_TYPES(input.type(), "sage_forward_cuda", ([&] {
                                 cudaGatherReduce<scalar_t><<<grid, block, shared_memory>>>(
                                     output.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
@@ -150,7 +173,8 @@ std::vector<torch::Tensor> SAGEForwardCuda(
                                     num_parts,
                                     part_size,
                                     dim_workder,
-                                    warp_per_block
+                                    warp_per_block,
+                                    (int)(aggr_type == "max")
                                 );
                             }));
                                  

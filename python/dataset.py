@@ -8,6 +8,8 @@ import cv2
 import dgl
 from dgl.data import DGLDataset
 from util import *
+import gnn_ext
+from scipy.sparse import coo_matrix
 
 class KittiHelper: # the meta class, used for both PyG dataset and DGL dataset
   def __init__(self, ds_config) -> None:
@@ -425,6 +427,39 @@ class KittiPyG(Dataset):
   
   def __len__(self):
     return len(self.kitti)
+
+class KittiExt(Dataset):
+  def __init__(self, ds_config):
+    self.kitti = KittiHelper(ds_config)
+  
+  def __len__(self):
+    return len(self.kitti)
+  
+  def get(self, idx):
+    return self.__getitem__(idx)
+  
+  def __getitem__(self, idx):
+    input_v, coord_lst, keypoint_indices_lst, edges_lst, cls_labels, enc_boxes, valid_boxes = \
+      self.kitti.fetch_data(idx)
+    graphs = []
+    for i in range(len(edges_lst)):
+      edges = edges_lst[i].transpose(1, 0)
+      edge_vals = [1] * len(edges[0, :])
+      keys = keypoint_indices_lst[i]
+      coords = coord_lst[i]
+      num_nodes = len(coords)
+      coo = coo_matrix((edge_vals, (edges[0, :], edges[1, :])), shape=(num_nodes, num_nodes))
+      csc = coo.tocsc()
+      row_pointers = torch.IntTensor(csc.indptr)
+      column_index = torch.IntTensor(csc.indices)
+      degrees = (row_pointers[1:] - row_pointers[:-1]).tolist()
+      degrees = torch.sqrt(torch.FloatTensor(list(map(lambda x: 1 if x > 0 else 0, degrees))))
+      part_size = 32
+      part_ptr, part_to_nodes = gnn_ext.build_part(part_size, row_pointers)
+      sg = [torch.from_numpy(input_v) if i == 0 else None, torch.LongTensor(edges), \
+        torch.LongTensor(keys), torch.FloatTensor(coords), row_pointers, column_index, degrees, part_ptr, part_to_nodes]
+      graphs.append(sg)
+    return graphs
 
 class KittiDGL(DGLDataset):
   def __init__(self, ds_config):
